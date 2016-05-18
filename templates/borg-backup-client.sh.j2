@@ -1,0 +1,63 @@
+#!/bin/bash
+
+#save all output to syslog and to sdterr
+exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+backup=false
+
+
+if [[ -f {{ borgbackup_client_temp_file }} ]]; then
+  last_success=$(head -n 1 "{{ borgbackup_client_temp_file }}")
+
+  if [[ ($last_success =~ ^[0-9]+$ ) &&  ($last_success > 0) ]]; then
+    seconds_since_last_backup_success=$(( $(date '+%s') - $last_success ))
+    echo "seconds since last backup success: $seconds_since_last_backup_success"
+    if [[ $seconds_since_last_backup_success > {{ borgbackup_time_between_backups_in_seconds }} ]]; then
+      echo "time exceeded, backing up"
+      backup=true
+    fi
+  fi
+else
+  echo 'no successful backup record found, backing up'
+  backup=true
+fi
+
+
+
+#make sure that only the specified key is used to connect to the remote host, no ssh agent non-sense
+unset SSH_AUTH_SOCK
+
+#borg should use the following command to initiate SSH session with the key that is assigned
+export BORG_RSH="ssh -i {{ borgbackup_ssh_key_path }}"
+export BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK="yes"
+export BORG_CACHE_DIR={{ borgbackup_client_cache_path }}
+
+if [[ $backup == true ]]; then
+  wait=$(( $RANDOM % 120 + 15 ))
+  echo "sleeping for $wait seconds"
+  sleep $wait
+  borg \
+    create \
+      {% if borgbackup_onefilesystem %}--one-file-system \{{ '\n' }}{% endif %}
+      --stats \
+      --verbose \
+      --show-rc \
+      --compression {{ borgbackup_compression }} \
+      --lock-wait {{ borgbackup_lock_wait_seconds }} \{{ '\n' }}
+      {%- for exclude in borgbackup_exclude_patterns -%}
+        {{ "      " }}--exclude {{ exclude }} \{{ '\n' }}
+      {%- endfor %}
+      --remote-path {{ borgbackup_remote_binary_path }} \
+      "{{ borgbackup_server_user }}@{{ borgbackup_backup_server }}:{{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}::{{ borgbackup_backup_name }}" \{{ '\n' }}
+      {%- for folder in borgbackup_backup_paths -%}
+      {{ "      " }}"{{folder}}"{% if not loop.last %} \{% endif %}{{ '\n' }}
+      {%- endfor %}  
+  if [[ $? == 0 ]]; then
+    date '+%s' > {{ borgbackup_client_temp_file }}
+    echo 'backup succeeded'
+    exit $?
+  fi
+  echo 'backup failed'
+  exit $?
+fi
+echo "backup not running 'backup=$backup'"

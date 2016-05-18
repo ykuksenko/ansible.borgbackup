@@ -1,0 +1,36 @@
+#!/bin/bash
+
+#save all output to syslog and to sdterr
+exec 1> >(logger -s -t $(basename $0)) 2>&1
+
+export BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=yes
+export BORG_CHECK_I_KNOW_WHAT_I_AM_DOING=YES
+export BORG_CACHE_DIR={{ borgbackup_client_cache_path }}
+while read host; do
+  echo "Pruning repository for host '$host'"
+  borg \
+    prune \
+      --prefix "$host" \
+      --stats \
+      --verbose \
+      --lock-wait {{ borgbackup_lock_wait_seconds }} \
+      --show-rc \
+      --keep-within={{ borgbackup_keep_within }} \
+      --keep-hourly {{ borgbackup_keep_hourly }} \
+      --keep-daily {{ borgbackup_keep_daily }} \
+      --keep-weekly {{ borgbackup_keep_weekly }} \
+      --keep-monthly {{ borgbackup_keep_monthly }} \
+      --keep-yearly {{ borgbackup_keep_yearly }} \
+      {{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}
+done < <(borg list "{{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}" |awk -F'_' '{print $1}'|sort|uniq)
+echo ''
+echo ''
+
+#    --repair \
+echo 'Checking repository integrity'
+borg \
+  check \
+    --verbose \
+    --lock-wait {{ borgbackup_lock_wait_seconds }} \
+    --show-rc \
+    {{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}

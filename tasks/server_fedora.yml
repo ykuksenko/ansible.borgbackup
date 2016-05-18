@@ -1,0 +1,54 @@
+---
+# tasks file for borg-backup
+
+#- name: install borg backup
+#  file: path=/bin/borg state=file
+
+- name: borg backup user
+  user: name="{{ borgbackup_server_user }}" group="{{ borgbackup_server_user }}" state=present
+
+- name: ensure borg repo path exists
+  file: path="{{ borgbackup_repo_path }}"
+    state=directory
+    owner="{{ borgbackup_server_user }}"
+    group="{{ borgbackup_server_user }}"
+    mode=0775
+
+- name: initialize borg repo
+  command: /bin/borg init --encryption=none {{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}
+    creates="{{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}"
+
+- name: ensure correct permissions on repo path
+  file:
+    path="{{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}"
+    state=directory
+    owner="{{ borgbackup_server_user }}"
+    group="{{ borgbackup_server_user }}"
+    mode=0775
+    recurse=yes
+
+- name: set repo to append-only mode
+  lineinfile:
+    dest="{{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}/config"
+    regexp="^append only="
+    line="append only={{ borgbackup_append_only }}"
+    state=present
+
+- name: reset all authorized keys on server
+  authorized_key:
+    #this is a fake private key 
+    key='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC096749TLs8p5YvE1Zm7JdXYB6+TZs0AGDBx3Xp7wsC7eKKzKK05nghI/cxaDFQCTrNb8kGeK9dmW/2qi/xt/eejP1TG8bHQv9JyNl8MA1GNiQqkVWULYfFZW3M12b88kQC1jPqblA6jJaW/CRU4lz8LOJ0quGmmId+4ISZ8JCgKoyIAIAS0IjZirQXdjQiNVdEfNpHjOl/u4KN/tBCFc7DsIstWEa/InbbDn8ggeQNia+1DF25SsiWRN5EFbZNxGgwwfyFmlzN8w/G8fM6dFYKBsEERzPj6HHQZZJfjMNHNGomb+m8IGnLc0jcevaQQThEFvql/Tc7gz4DxyWfoLL fake'
+    manage_dir=yes
+    user="{{ borgbackup_server_user }}"
+    state={{ item }}
+    exclusive=yes
+  with_items: #we are clearing the file with exclusive access so we cycle present absent
+    - present
+    - absent
+  when: "{{ borgbackup_ssh_key_reset }}"
+
+- name: setup repository maintanence script
+  template: src=borg-backup-server.sh.j2 dest=/usr/local/bin/borg-backup-server.sh owner=root group=root mode=0755
+
+- name: install cron job
+  cron: name=borg-backup-server hour=1 job=/usr/local/sbin/borg-backup-server.sh state=present user="{{ borgbackup_server_user }}"

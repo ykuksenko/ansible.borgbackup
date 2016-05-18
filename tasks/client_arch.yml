@@ -1,0 +1,60 @@
+---
+# tasks file for borg-backup
+
+- name: install borg backup and cron if absent
+  pacman: name="{{ item }}" state=latest
+  with_items:
+    - borg
+    - cronie
+  when: (ansible_distribution == "Antergos") or (ansible_distribution == "Archlinux")
+
+- name: ensure cronie is running and enabled
+  service: name=cronie state=started enabled=yes
+  when: (ansible_distribution == "Antergos") or (ansible_distribution == "Archlinux")
+
+- name: install borg back for fedora
+  dnf: name=borgbackup state=latest
+  when: (ansible_distribution_major_version == "23") and (ansible_distribution == "Fedora")
+
+- name: reset ssh keys for borg backup
+  file: path="{{ item }}" state=absent
+  with_items:
+    - "{{ borgbackup_ssh_key_path }}"
+    - "{{ borgbackup_ssh_key_path }}.pub"
+  when: "{{ borgbackup_ssh_key_reset }}"
+
+- name: generate ssh keys for borg backup
+  command: >
+    ssh-keygen -N '' -f {{ borgbackup_ssh_key_path }} -C 'borg@{{ ansible_fqdn }}'
+    creates="{{ borgbackup_ssh_key_path }}*"
+
+- name: read public key for borg
+  command: "cat {{ borgbackup_ssh_key_path }}.pub"
+  register: borgkey
+  changed_when: False
+
+- name: install public key to borg backup server
+  authorized_key: >
+    key="{{ borgkey.stdout }}"
+    manage_dir=yes
+    key_options="command=\"borg serve --restrict-to-path {{ borgbackup_repo_path }}/{{ borgbackup_repo_name }}\",no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc"
+    user="{{ borgbackup_server_user }}"
+    state=present
+  delegate_to: "{{ borgbackup_backup_server }}"
+
+- name: verify that the known_hosts file exists for root user
+  copy: content='' dest='~/.ssh/known_hosts' force=no mode=0644 owner=root group=root
+
+#the known hosts module apears not to work with this method of key lookup so line in file was used instead
+- name: install borg server public key to known_hosts file
+  lineinfile: >
+    regexp="{{ borgbackup_backup_server }}"
+    line="{{ borgbackup_backup_server }} {{ borgbackup_backup_server_public_key_type }} {{ borgbackup_backup_server_public_host_key }}"
+    state=present
+    dest='~/.ssh/known_hosts'
+
+- name: install backup script
+  template: src=borg-backup-client.sh.j2 dest=/usr/local/sbin/borg-backup-client.sh owner=root group=root mode=0550
+
+- name: install cron job
+  cron: name=borg-backup-client minute='*/5' job="flock -n /var/run/borgbackup.lockfile -c /usr/local/sbin/borg-backup-client.sh" state=present

@@ -1,0 +1,5 @@
+---
+- include: server_fedora.yml
+  when: borgbackup_is_server
+- include: client_arch.yml
+  when: not borgbackup_is_server
